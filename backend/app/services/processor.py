@@ -211,6 +211,14 @@ def process_task(task_id: str) -> None:
         total_time = max(perf_counter() - start_time, 1e-6)
         processing_fps = frame_index / total_time
 
+        # Finalize media handles before exposing completed status and video URL.
+        if cap is not None:
+            cap.release()
+            cap = None
+        if writer is not None:
+            writer.release()
+            writer = None
+
         for row in report_rows:
             row["processing_fps"] = round(processing_fps, 2)
 

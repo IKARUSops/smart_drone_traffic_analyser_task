@@ -198,8 +198,12 @@ def get_task_result(task_id: str, x_task_token: str | None = Header(default=None
 
 
 @app.get("/api/v1/tasks/{task_id}/video")
-def get_processed_video(task_id: str, x_task_token: str | None = Header(default=None)) -> FileResponse:
-    task = assert_task_access(task_id, x_task_token)
+def get_processed_video(
+    task_id: str,
+    x_task_token: str | None = Header(default=None),
+    task_token: str | None = None,
+) -> FileResponse:
+    task = assert_task_access(task_id, x_task_token or task_token)
 
     path = Path(task.output_video_path)
     if not path.exists():

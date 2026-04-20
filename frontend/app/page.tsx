@@ -28,7 +28,7 @@ export default function HomePage() {
       if (frameUrl) {
         URL.revokeObjectURL(frameUrl);
       }
-      if (videoUrl) {
+      if (videoUrl && videoUrl.startsWith("blob:")) {
         URL.revokeObjectURL(videoUrl);
       }
     };
@@ -128,15 +128,8 @@ export default function HomePage() {
             throw new Error("Result retrieval failed");
           }
           const resultPayload: ResultResponse = await resultResponse.json();
-
-          const videoResponse = await fetch(`${API_BASE_URL}${resultPayload.video_url}`, {
-            headers: { "X-Task-Token": taskToken },
-          });
-          if (!videoResponse.ok) {
-            throw new Error("Processed video retrieval failed");
-          }
-          const videoBlob = await videoResponse.blob();
-          setVideoUrl(URL.createObjectURL(videoBlob));
+          const token = encodeURIComponent(taskToken);
+          setVideoUrl(`${API_BASE_URL}${resultPayload.video_url}?task_token=${token}`);
 
           setResult(resultPayload);
           setStep("result");
@@ -261,7 +254,7 @@ export default function HomePage() {
               </article>
             </div>
 
-            <video controls width={900} src={videoUrl} />
+            <video controls width={900} src={videoUrl} preload="metadata" playsInline />
 
             <section className="downloads">
               <label>
