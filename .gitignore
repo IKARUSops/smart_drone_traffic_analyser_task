@@ -1,0 +1,76 @@
+# -----------------------------
+# OS / Editor
+# -----------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# -----------------------------
+# Python
+# -----------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+backend/.venv/
+
+# -----------------------------
+# Node / Next.js
+# -----------------------------
+node_modules/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+frontend/.pnpm-store/
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/pnpm-debug.log*
+
+# -----------------------------
+# Local environment files
+# -----------------------------
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+frontend/.env.local
+frontend/.env.*.local
+
+# -----------------------------
+# Project-generated data/artifacts
+# -----------------------------
+backend/data/uploads/
+backend/data/frames/
+backend/data/outputs/
+backend/data/reports/
+
+# Keep folders in git if desired
+!backend/data/uploads/.gitkeep
+!backend/data/frames/.gitkeep
+!backend/data/outputs/.gitkeep
+!backend/data/reports/.gitkeep
+
+# Model weights and large binaries
+backend/*.pt
+*.onnx
+*.engine
+
+# Misc logs
+*.log

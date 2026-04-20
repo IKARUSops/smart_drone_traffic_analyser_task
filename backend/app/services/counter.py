@@ -60,7 +60,13 @@ def estimate_global_motion(prev_gray: np.ndarray, gray: np.ndarray) -> tuple[flo
     if len(good_prev) < 10:
         return 0.0, 0.0
 
-    deltas = good_next - good_prev
+    # OpenCV LK points are often shaped as (N, 1, 2); normalize to (N, 2).
+    prev_xy = np.asarray(good_prev, dtype=np.float32).reshape(-1, 2)
+    next_xy = np.asarray(good_next, dtype=np.float32).reshape(-1, 2)
+    if prev_xy.shape[0] < 10 or next_xy.shape[0] < 10:
+        return 0.0, 0.0
+
+    deltas = next_xy - prev_xy
     dx = float(np.median(deltas[:, 0]))
     dy = float(np.median(deltas[:, 1]))
     return dx, dy
