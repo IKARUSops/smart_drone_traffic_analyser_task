@@ -52,4 +52,5 @@ class ResultResponse(BaseModel):
     input_fps: float
     processing_fps: float
     video_url: str
+    download_url: str
     available_reports: list[str]

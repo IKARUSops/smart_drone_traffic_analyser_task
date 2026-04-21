@@ -2,6 +2,7 @@
 
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 
+import MediaPlayer from "@/components/MediaPlayer";
 import LinePicker from "@/components/LinePicker";
 import { ResultResponse, StatusResponse, UploadResponse } from "@/types/api";
 
@@ -22,7 +23,8 @@ export default function HomePage() {
   const [taskId, setTaskId] = useState<string>("");
   const [taskToken, setTaskToken] = useState<string>("");
   const [frameUrl, setFrameUrl] = useState<string>("");
-  const [videoUrl, setVideoUrl] = useState<string>("");
+  const [videoSrc, setVideoSrc] = useState<string>("");
+  const [videoDownloadUrl, setVideoDownloadUrl] = useState<string>("");
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [result, setResult] = useState<ResultResponse | null>(null);
   const [error, setError] = useState<string>("");
@@ -36,11 +38,8 @@ export default function HomePage() {
       if (frameUrl) {
         URL.revokeObjectURL(frameUrl);
       }
-      if (videoUrl && videoUrl.startsWith("blob:")) {
-        URL.revokeObjectURL(videoUrl);
-      }
     };
-  }, [frameUrl, videoUrl]);
+  }, [frameUrl]);
 
   const uploadVideo = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -137,7 +136,8 @@ export default function HomePage() {
           }
           const resultPayload: ResultResponse = await resultResponse.json();
           const token = encodeURIComponent(taskToken);
-          setVideoUrl(`${API_BASE_URL}${resultPayload.video_url}?task_token=${token}`);
+          setVideoSrc(`${API_BASE_URL}${resultPayload.video_url}?task_token=${token}`);
+          setVideoDownloadUrl(`${API_BASE_URL}${resultPayload.download_url}?task_token=${token}`);
 
           setResult(resultPayload);
           setStep("result");
@@ -195,7 +195,7 @@ export default function HomePage() {
       <div className="app-shell">
         <header className="app-header">
           <div>
-          <p className="eyebrow">Smart Drone Traffic Analyzer</p>
+            <p className="eyebrow">Smart Drone Traffic Analyzer</p>
             <h1>Traffic Intelligence Dashboard</h1>
             <p className="subtitle">Upload one video, define a single counting line, and extract directional flow metrics.</p>
           </div>
@@ -253,50 +253,53 @@ export default function HomePage() {
         )}
 
         {step === "result" && result && (
-          <section className="panel">
-            <h2>Analysis completed</h2>
-            <div className="stat-grid">
-              <article>
-                <h3>Total unique vehicles</h3>
-            <h2>Analysis Completed</h2>
-            <p>Directional counts are computed after crossing-line verification with track-level deduplication.</p>
-              </article>
-              <article>
-                <h3>North</h3>
-                <p>{result.per_direction_count.North ?? 0}</p>
-              </article>
-              <article>
-                <h3>South</h3>
-                <p>{result.per_direction_count.South ?? 0}</p>
-              </article>
-              <article>
-                <h3>East</h3>
-                <p>{result.per_direction_count.East ?? 0}</p>
-              </article>
-              <article>
-                <h3>West</h3>
-                <p>{result.per_direction_count.West ?? 0}</p>
-              </article>
-              <article>
-                <h3>Processing time (s)</h3>
-                <p>{result.processing_time_seconds}</p>
-              </article>
+          <section className="result-grid">
+            <div className="panel result-summary">
+              <h2>Analysis Completed</h2>
+              <p>Directional counts are computed after crossing-line verification with track-level deduplication.</p>
+              <div className="stat-grid">
+                <article>
+                  <h3>Total unique vehicles</h3>
+                  <p>{result.total_unique_vehicles}</p>
+                </article>
+                <article>
+                  <h3>North</h3>
+                  <p>{result.per_direction_count.North ?? 0}</p>
+                </article>
+                <article>
+                  <h3>South</h3>
+                  <p>{result.per_direction_count.South ?? 0}</p>
+                </article>
+                <article>
+                  <h3>East</h3>
+                  <p>{result.per_direction_count.East ?? 0}</p>
+                </article>
+                <article>
+                  <h3>West</h3>
+                  <p>{result.per_direction_count.West ?? 0}</p>
+                </article>
+                <article>
+                  <h3>Processing time (s)</h3>
+                  <p>{result.processing_time_seconds}</p>
+                </article>
+              </div>
             </div>
 
-            <video controls width={900} src={videoUrl} preload="metadata" playsInline />
-
-            <section className="downloads">
-              <label>
-                Report format
-                <select value={reportFormat} onChange={(event) => setReportFormat(event.target.value as "csv" | "xlsx")}>
-                  <option value="csv">CSV</option>
-                  <option value="xlsx">XLSX</option>
-                </select>
-              </label>
-              <button className="primary" type="button" onClick={downloadReport}>
-                Download report
-              </button>
-            </section>
+            <div className="panel result-media">
+              <MediaPlayer src={videoSrc} downloadUrl={videoDownloadUrl} poster={frameUrl} title="Processed output video" />
+              <section className="downloads result-downloads">
+                <label>
+                  Report format
+                  <select value={reportFormat} onChange={(event) => setReportFormat(event.target.value as "csv" | "xlsx")}>
+                    <option value="csv">CSV</option>
+                    <option value="xlsx">XLSX</option>
+                  </select>
+                </label>
+                <button className="primary" type="button" onClick={downloadReport}>
+                  Download report
+                </button>
+              </section>
+            </div>
           </section>
         )}
 

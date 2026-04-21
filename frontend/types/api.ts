@@ -30,5 +30,6 @@ export type ResultResponse = {
   input_fps: number;
   processing_fps: number;
   video_url: string;
+  download_url: string;
   available_reports: string[];
 };

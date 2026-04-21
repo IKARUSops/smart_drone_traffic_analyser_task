@@ -1,10 +1,11 @@
 import secrets
+import re
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi import BackgroundTasks, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.core.settings import (
     ADMIN_CLEANUP_TOKEN,
@@ -32,6 +33,8 @@ from app.store import store
 
 app = FastAPI(title="Smart Drone Traffic Analyzer API", version="1.0.0")
 
+RANGE_RE = re.compile(r"bytes=(\d+)-(\d*)")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_CORS_ORIGINS,
@@ -48,6 +51,55 @@ def assert_task_access(task_id: str, token: str | None) -> TaskRecord:
     if token != task.access_token:
         raise HTTPException(status_code=401, detail="Invalid task token")
     return task
+
+
+def stream_video_file(path: Path, range_header: str | None = None):
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Processed video not available")
+
+    file_size = path.stat().st_size
+
+    if not range_header:
+        return FileResponse(
+            path,
+            media_type="video/mp4",
+            headers={"Accept-Ranges": "bytes", "Cache-Control": "no-store"},
+        )
+
+    match = RANGE_RE.fullmatch(range_header.strip())
+    if not match:
+        raise HTTPException(status_code=416, detail="Invalid Range header")
+
+    start = int(match.group(1))
+    end = int(match.group(2)) if match.group(2) else file_size - 1
+    if start < 0 or start >= file_size or end < start:
+        raise HTTPException(status_code=416, detail="Requested range not satisfiable")
+
+    end = min(end, file_size - 1)
+    chunk_size = end - start + 1
+
+    def iterator():
+        with path.open("rb") as handle:
+            handle.seek(start)
+            remaining = chunk_size
+            while remaining > 0:
+                data = handle.read(min(1024 * 1024, remaining))
+                if not data:
+                    break
+                remaining -= len(data)
+                yield data
+
+    return StreamingResponse(
+        iterator(),
+        status_code=206,
+        media_type="video/mp4",
+        headers={
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "no-store",
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Content-Length": str(chunk_size),
+        },
+    )
 
 
 @app.get("/health")
@@ -192,13 +244,27 @@ def get_task_result(task_id: str, x_task_token: str | None = Header(default=None
         processing_time_seconds=result["processing_time_seconds"],
         input_fps=result["input_fps"],
         processing_fps=result["processing_fps"],
-        video_url=f"/api/v1/tasks/{task_id}/video",
+        video_url=f"/api/v1/tasks/{task_id}/video/stream",
+        download_url=f"/api/v1/tasks/{task_id}/video/download",
         available_reports=["csv", "xlsx"],
     )
 
 
-@app.get("/api/v1/tasks/{task_id}/video")
-def get_processed_video(
+@app.get("/api/v1/tasks/{task_id}/video/stream")
+def get_processed_video_stream(
+    task_id: str,
+    x_task_token: str | None = Header(default=None),
+    task_token: str | None = None,
+    range: str | None = Header(default=None, alias="Range"),
+):
+    task = assert_task_access(task_id, x_task_token or task_token)
+
+    path = Path(task.output_video_path)
+    return stream_video_file(path, range)
+
+
+@app.get("/api/v1/tasks/{task_id}/video/download")
+def get_processed_video_download(
     task_id: str,
     x_task_token: str | None = Header(default=None),
     task_token: str | None = None,
