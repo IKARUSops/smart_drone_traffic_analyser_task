@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { IBM_Plex_Mono, Sora, Source_Sans_3 } from "next/font/google";
+import Navbar from "@/components/Navbar";
 import "./globals.css";
 
 const headingFont = Sora({
@@ -20,13 +21,18 @@ const monoFont = IBM_Plex_Mono({
 
 export const metadata: Metadata = {
   title: "Smart Drone Traffic Analyzer",
-  description: "Upload a video, draw counting line, and get traffic analytics.",
+  description: "Analyze drone traffic video with a guided inference workflow and dashboard.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className={`${headingFont.variable} ${bodyFont.variable} ${monoFont.variable}`}>{children}</body>
+      <body className={`${headingFont.variable} ${bodyFont.variable} ${monoFont.variable}`}>
+        <div className="site-frame">
+          <Navbar />
+          <main className="site-main">{children}</main>
+        </div>
+      </body>
     </html>
   );
 }
