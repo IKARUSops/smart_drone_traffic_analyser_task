@@ -118,19 +118,25 @@ export default function LinePicker({ imageUrl, onConfirm }: Props) {
 
   return (
     <section className="line-picker">
-      <h2>Select exactly two points on frame 20 to define the counting line</h2>
+      <h2>Define Counting Line On Frame 20</h2>
       <p>
         Click once to place P1 and again to place P2. Your points are saved in OpenCV pixel coordinates.
       </p>
 
-      <label className="mode-row">
-        Scene mode:
-        <select value={sceneMode} onChange={(event) => setSceneMode(event.target.value as SceneMode)}>
-          <option value="auto">Auto</option>
-          <option value="top_down">Top-down drone</option>
-          <option value="angled">Angled road</option>
-        </select>
-      </label>
+      <div className="picker-top-row">
+        <label className="mode-row">
+          Scene mode:
+          <select value={sceneMode} onChange={(event) => setSceneMode(event.target.value as SceneMode)}>
+            <option value="auto">Auto</option>
+            <option value="top_down">Top-down drone</option>
+            <option value="angled">Angled road</option>
+          </select>
+        </label>
+        <div className="point-list">
+          <span className="point-pill">P1: {points[0] ? `${points[0][0]}, ${points[0][1]}` : "Not set"}</span>
+          <span className="point-pill">P2: {points[1] ? `${points[1][0]}, ${points[1][1]}` : "Not set"}</span>
+        </div>
+      </div>
 
       <canvas ref={canvasRef} className="line-canvas" onClick={handleCanvasClick} />
 
@@ -138,8 +144,8 @@ export default function LinePicker({ imageUrl, onConfirm }: Props) {
         <button type="button" onClick={resetPoints} className="secondary">
           Reset points
         </button>
-        <button type="button" onClick={confirmPoints} disabled={points.length !== 2}>
-          Confirm line and start processing
+        <button className="primary" type="button" onClick={confirmPoints} disabled={points.length !== 2}>
+          Start analysis
         </button>
       </div>
     </section>

@@ -9,6 +9,14 @@ type Step = "upload" | "line" | "processing" | "result" | "error";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
+const STEP_LABELS: Record<Step, string> = {
+  upload: "Step 1 of 4 - Upload",
+  line: "Step 2 of 4 - Define Line",
+  processing: "Step 3 of 4 - Processing",
+  result: "Step 4 of 4 - Results",
+  error: "Flow interrupted",
+};
+
 export default function HomePage() {
   const [step, setStep] = useState<Step>("upload");
   const [taskId, setTaskId] = useState<string>("");
@@ -185,16 +193,32 @@ export default function HomePage() {
   return (
     <main className="page-root">
       <div className="app-shell">
-        <header>
+        <header className="app-header">
+          <div>
           <p className="eyebrow">Smart Drone Traffic Analyzer</p>
-          <h1>Vehicle Flow Intelligence From A Single Video</h1>
+            <h1>Traffic Intelligence Dashboard</h1>
+            <p className="subtitle">Upload one video, define a single counting line, and extract directional flow metrics.</p>
+          </div>
+          <span className="step-badge">{STEP_LABELS[step]}</span>
         </header>
 
         {step === "upload" && (
           <section className="panel">
-            <h2>Upload your traffic video</h2>
-            <p>After upload, frame 20 will open for line placement before processing starts.</p>
-            <input type="file" accept="video/*" onChange={uploadVideo} disabled={!canUpload} />
+            <h2>Upload Video</h2>
+            <p>After upload, frame 20 opens for line placement before processing starts.</p>
+            <div className="upload-drop">
+              <label>
+                {isUploading ? "Uploading..." : "Select Video File"}
+                <input
+                  className="hidden-file-input"
+                  type="file"
+                  accept="video/*"
+                  onChange={uploadVideo}
+                  disabled={!canUpload}
+                />
+              </label>
+              <small>Recommended format: MP4. Maximum quality input provides better tracking stability.</small>
+            </div>
           </section>
         )}
 
@@ -202,8 +226,12 @@ export default function HomePage() {
 
         {step === "processing" && (
           <section className="panel">
-            <h2>Processing video and tracking vehicles</h2>
-            <p>{status?.stage ?? "Initializing model"}</p>
+            <h2>Processing Video</h2>
+            <p>Tracking vehicles and evaluating directional crossings.</p>
+            <div className="processing-meta">
+              <span className="stage-chip">{status?.stage ?? "Initializing model"}</span>
+              <span>{(status?.progress_percent ?? 0).toFixed(1)}% complete</span>
+            </div>
             <progress value={status?.progress_percent ?? 0} max={100} />
             <div className="stat-grid">
               <article>
@@ -230,7 +258,8 @@ export default function HomePage() {
             <div className="stat-grid">
               <article>
                 <h3>Total unique vehicles</h3>
-                <p>{result.total_unique_vehicles}</p>
+            <h2>Analysis Completed</h2>
+            <p>Directional counts are computed after crossing-line verification with track-level deduplication.</p>
               </article>
               <article>
                 <h3>North</h3>
@@ -264,7 +293,7 @@ export default function HomePage() {
                   <option value="xlsx">XLSX</option>
                 </select>
               </label>
-              <button type="button" onClick={downloadReport}>
+              <button className="primary" type="button" onClick={downloadReport}>
                 Download report
               </button>
             </section>
@@ -273,9 +302,9 @@ export default function HomePage() {
 
         {step === "error" && (
           <section className="panel error-panel">
-            <h2>Something failed</h2>
+            <h2>Request Failed</h2>
             <p>{error || "Unknown error"}</p>
-            <button type="button" onClick={() => window.location.reload()}>
+            <button className="primary" type="button" onClick={() => window.location.reload()}>
               Restart flow
             </button>
           </section>
