@@ -32,6 +32,23 @@ _model: YOLO | None = None
 logger = logging.getLogger(__name__)
 
 
+def open_video_writer(output_path: Path, fps: float, frame_size: tuple[int, int]) -> cv2.VideoWriter:
+    codec_candidates = ["avc1", "H264", "mp4v"]
+
+    for codec in codec_candidates:
+        writer = cv2.VideoWriter(
+            str(output_path),
+            cv2.VideoWriter_fourcc(*codec),
+            fps,
+            frame_size,
+        )
+        if writer.isOpened():
+            logger.info("Opened video writer for %s with codec %s", output_path.name, codec)
+            return writer
+
+    raise RuntimeError("Unable to create output video writer with a supported codec")
+
+
 def get_model() -> YOLO:
     global _model
     if _model is None:
@@ -77,13 +94,9 @@ def process_task(task_id: str) -> None:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        writer = cv2.VideoWriter(
-            str(output_path),
-            cv2.VideoWriter_fourcc(*"mp4v"),
-            fps,
-            (width, height),
-        )
-        if not writer.isOpened():
+        try:
+            writer = open_video_writer(output_path, fps, (width, height))
+        except RuntimeError:
             store.update(task_id, status="failed", stage="error", error="Unable to create output video")
             return
 
