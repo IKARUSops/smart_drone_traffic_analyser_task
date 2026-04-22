@@ -8,7 +8,7 @@ End-to-end traffic analysis system with:
 
 ## Finalized Product Decisions
 
-- Device mode: auto-select GPU if available, otherwise CPU
+- Device mode: auto-select GPU if available, otherwise CPU [If Cuda installed.]
 - Detection model: YOLOv10
 - Vehicle scope: includes bicycle and other vehicle classes from configured YOLO IDs
 - Counting directions: North, South, East, West
