@@ -40,14 +40,16 @@ class TaskStore:
         self,
         task_id: str,
         max_concurrent_tasks: int,
-        line_points: list[list[int]],
+        line_points: list[list[int]] | None,
         scene_mode: str,
+        region_box: list[list[int]] | None = None,
+        region_orientation: str | None = None,
     ) -> Optional[str]:
         with self._lock:
             task = self._tasks.get(task_id)
             if task is None:
                 return "not_found"
-            if task.status not in {"awaiting_line", "failed"}:
+            if task.status not in {"awaiting_line", "awaiting_region", "failed"}:
                 return "invalid_status"
 
             active_jobs = sum(1 for item in self._tasks.values() if item.status in {"queued", "processing"})
@@ -55,13 +57,26 @@ class TaskStore:
                 return "capacity_reached"
 
             task.line_points = line_points
+            task.region_box = region_box
+            if region_orientation is not None:
+                task.region_orientation = region_orientation
             task.scene_mode = scene_mode
             task.status = "queued"
             task.stage = "queued for processing"
             task.progress_percent = 0.0
             task.error = None
+            task.cancellation_requested = False
             task.updated_at = datetime.utcnow()
             return "ok"
+
+    def cancel_task(self, task_id: str) -> bool:
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None:
+                return False
+            task.cancellation_requested = True
+            task.updated_at = datetime.utcnow()
+            return True
 
 
 store = TaskStore()

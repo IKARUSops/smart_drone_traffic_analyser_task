@@ -1,11 +1,12 @@
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Optional
 
 import cv2
 import numpy as np
 
 
 Direction = Literal["North", "South", "East", "West"]
+RegionOrientation = Literal["horizontal", "vertical"]
 
 
 @dataclass
@@ -46,6 +47,54 @@ def signed_distance_to_line(
     return float((x2 - x1) * (py - y1) - (y2 - y1) * (px - x1))
 
 
+def compute_box_edges(
+    box_points: list[list[int]],
+) -> dict[str, tuple[tuple[int, int], tuple[int, int]]]:
+    tl = (int(box_points[0][0]), int(box_points[0][1]))
+    tr = (int(box_points[1][0]), int(box_points[1][1]))
+    br = (int(box_points[2][0]), int(box_points[2][1]))
+    bl = (int(box_points[3][0]), int(box_points[3][1]))
+
+    return {
+        "top": (tl, tr),
+        "right": (tr, br),
+        "bottom": (bl, br),
+        "left": (tl, bl),
+    }
+
+
+def point_to_box_edge_crossing(
+    prev_pt: tuple[float, float],
+    curr_pt: tuple[float, float],
+    edges: dict[str, tuple[tuple[int, int], tuple[int, int]]],
+    orientation: RegionOrientation,
+) -> Optional[str]:
+    monitored_edges = ("top", "bottom") if orientation == "horizontal" else ("left", "right")
+    crossed_candidates: list[tuple[str, float]] = []
+
+    movement = float(np.hypot(curr_pt[0] - prev_pt[0], curr_pt[1] - prev_pt[1]))
+    if movement <= 2.0:
+        return None
+
+    for edge_name in monitored_edges:
+        edge = edges.get(edge_name)
+        if edge is None:
+            continue
+        p1, p2 = edge
+        prev_d = signed_distance_to_line(prev_pt, p1, p2)
+        curr_d = signed_distance_to_line(curr_pt, p1, p2)
+
+        crossed = prev_d * curr_d < 0
+        if crossed:
+            crossed_candidates.append((edge_name, abs(curr_d)))
+
+    if not crossed_candidates:
+        return None
+
+    crossed_candidates.sort(key=lambda item: item[1])
+    return crossed_candidates[0][0]
+
+
 def estimate_global_motion(prev_gray: np.ndarray, gray: np.ndarray) -> tuple[float, float]:
     prev_points = cv2.goodFeaturesToTrack(prev_gray, maxCorners=300, qualityLevel=0.01, minDistance=8)
     if prev_points is None or len(prev_points) < 10:
@@ -72,7 +121,22 @@ def estimate_global_motion(prev_gray: np.ndarray, gray: np.ndarray) -> tuple[flo
     return dx, dy
 
 
-def classify_direction(dx: float, dy: float) -> Direction:
+def classify_direction(
+    dx: float,
+    dy: float,
+    edge_crossed: Optional[str] = None,
+    orientation: Optional[RegionOrientation] = None,
+) -> Direction:
+    if edge_crossed is not None and orientation is not None:
+        if orientation == "horizontal":
+            if abs(dy) >= 0.2:
+                return "South" if dy >= 0 else "North"
+            return "East" if dx >= 0 else "West"
+
+        if abs(dx) >= 0.2:
+            return "East" if dx >= 0 else "West"
+        return "South" if dy >= 0 else "North"
+
     if abs(dx) >= abs(dy):
         return "East" if dx >= 0 else "West"
     return "South" if dy >= 0 else "North"

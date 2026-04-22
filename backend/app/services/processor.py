@@ -10,9 +10,12 @@ import torch
 from ultralytics import YOLO
 
 from app.core.settings import VEHICLE_CLASS_IDS, YOLO_MODEL
+from app.services.database import upsert_dashboard_task
 from app.services.counter import (
     classify_direction,
+    compute_box_edges,
     estimate_global_motion,
+    point_to_box_edge_crossing,
     signed_distance_to_line,
     tracking_point_from_bbox,
 )
@@ -30,6 +33,85 @@ CLASS_NAME_MAP = {
 
 _model: YOLO | None = None
 logger = logging.getLogger(__name__)
+
+
+def persist_task_snapshot(task_id: str) -> None:
+    task = store.get(task_id)
+    if task is not None:
+        upsert_dashboard_task(task)
+
+
+def draw_box_outline(frame: np.ndarray, points: list[list[int]], color: tuple[int, int, int] = (0, 255, 0), thickness: int = 3) -> None:
+    polygon = np.array(points, dtype=np.int32).reshape((-1, 1, 2))
+    cv2.polylines(frame, [polygon], isClosed=True, color=color, thickness=thickness)
+
+
+def draw_compass_overlay(frame: np.ndarray) -> None:
+    height, width = frame.shape[:2]
+    color = (80, 220, 255)
+    text_color = (240, 240, 240)
+
+    top_center = (width // 2, 36)
+    right_center = (width - 36, height // 2)
+    left_center = (36, height // 2)
+    bottom_center = (width // 2, height - 36)
+
+    cv2.arrowedLine(frame, (top_center[0], top_center[1] + 18), (top_center[0], top_center[1] - 12), color, 2, tipLength=0.35)
+    cv2.putText(frame, "North", (top_center[0] - 30, top_center[1] + 38), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
+
+    cv2.arrowedLine(frame, (right_center[0] - 18, right_center[1]), (right_center[0] + 12, right_center[1]), color, 2, tipLength=0.35)
+    cv2.putText(frame, "East", (right_center[0] - 22, right_center[1] - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
+
+    cv2.arrowedLine(frame, (left_center[0] + 18, left_center[1]), (left_center[0] - 12, left_center[1]), color, 2, tipLength=0.35)
+    cv2.putText(frame, "West", (left_center[0] - 20, left_center[1] - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
+
+    cv2.arrowedLine(frame, (bottom_center[0], bottom_center[1] - 18), (bottom_center[0], bottom_center[1] + 12), color, 2, tipLength=0.35)
+    cv2.putText(frame, "South", (bottom_center[0] - 30, bottom_center[1] - 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
+
+
+def draw_vehicle_counter_panel(frame: np.ndarray, per_class_count: dict[str, int]) -> None:
+    panel_x, panel_y = 12, 84
+    panel_width, panel_height = 220, 190
+
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (panel_x, panel_y), (panel_x + panel_width, panel_y + panel_height), (24, 24, 24), -1)
+    cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
+    cv2.rectangle(frame, (panel_x, panel_y), (panel_x + panel_width, panel_y + panel_height), (80, 220, 255), 2)
+
+    cv2.putText(frame, "Vehicle Counters", (panel_x + 10, panel_y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 255, 255), 2)
+
+    classes = ["bicycle", "car", "motorcycle", "bus", "truck"]
+    for idx, vehicle_class in enumerate(classes):
+        count = per_class_count.get(vehicle_class, 0)
+        y = panel_y + 54 + idx * 26
+        cv2.putText(frame, f"{vehicle_class.title():<10} {count}", (panel_x + 10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (235, 235, 235), 2)
+
+
+def render_edge_counters(
+    frame: np.ndarray,
+    per_direction_count: dict[str, int],
+    orientation: str,
+) -> None:
+    summary = (
+        f"N:{per_direction_count.get('North', 0)} "
+        f"S:{per_direction_count.get('South', 0)} "
+        f"E:{per_direction_count.get('East', 0)} "
+        f"W:{per_direction_count.get('West', 0)}"
+    )
+    cv2.putText(frame, summary, (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+    cv2.putText(frame, f"Region: {orientation}", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
+
+
+def classify_entry_direction(edge_crossed: str | None, dx: float, dy: float, orientation: str) -> str:
+    if edge_crossed == "top":
+        return "South"
+    if edge_crossed == "bottom":
+        return "North"
+    if edge_crossed == "left":
+        return "East"
+    if edge_crossed == "right":
+        return "West"
+    return classify_direction(dx, dy, orientation=orientation)
 
 
 def open_video_writer(output_path: Path, fps: float, frame_size: tuple[int, int]) -> cv2.VideoWriter:
@@ -64,13 +146,24 @@ def resolve_device() -> tuple[str, bool]:
 
 def process_task(task_id: str) -> None:
     task = store.get(task_id)
-    if task is None or task.line_points is None:
+    if task is None or (task.line_points is None and task.region_box is None):
         return
 
-    p1 = (int(task.line_points[0][0]), int(task.line_points[0][1]))
-    p2 = (int(task.line_points[1][0]), int(task.line_points[1][1]))
+    use_region_mode = task.region_box is not None
+    p1 = (0, 0)
+    p2 = (0, 0)
+    edges: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {}
+
+    if use_region_mode and task.region_box is not None:
+        edges = compute_box_edges(task.region_box)
+    elif task.line_points is not None:
+        p1 = (int(task.line_points[0][0]), int(task.line_points[0][1]))
+        p2 = (int(task.line_points[1][0]), int(task.line_points[1][1]))
+    else:
+        return
 
     store.update(task_id, status="processing", stage="tracking vehicles")
+    persist_task_snapshot(task_id)
 
     cap: cv2.VideoCapture | None = None
     writer: cv2.VideoWriter | None = None
@@ -87,6 +180,7 @@ def process_task(task_id: str) -> None:
         cap = cv2.VideoCapture(str(input_path))
         if not cap.isOpened():
             store.update(task_id, status="failed", stage="error", error="Unable to open video")
+            persist_task_snapshot(task_id)
             return
 
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -98,12 +192,15 @@ def process_task(task_id: str) -> None:
             writer = open_video_writer(output_path, fps, (width, height))
         except RuntimeError:
             store.update(task_id, status="failed", stage="error", error="Unable to create output video")
+            persist_task_snapshot(task_id)
             return
 
         start_time = perf_counter()
         previous_points: dict[int, tuple[float, float]] = {}
+        previous_inside_region: dict[int, bool] = {}
         previous_signed_distances: dict[int, float] = {}
         counted_track_ids: set[int] = set()
+        unique_counted_track_ids: set[int] = set()
 
         per_class_count: dict[str, int] = defaultdict(int)
         per_direction_count: dict[str, int] = defaultdict(int)
@@ -116,6 +213,17 @@ def process_task(task_id: str) -> None:
         event_index = 0
 
         while True:
+            runtime_task = store.get(task_id)
+            if runtime_task is not None and runtime_task.cancellation_requested:
+                store.update(
+                    task_id,
+                    status="cancelled",
+                    stage="cancelled",
+                    error=None,
+                )
+                persist_task_snapshot(task_id)
+                return
+
             ret, frame = cap.read()
             if not ret:
                 break
@@ -165,44 +273,105 @@ def process_task(task_id: str) -> None:
                             2,
                         )
 
-                        if track_id in previous_points and track_id not in counted_track_ids:
+                        if track_id in previous_points:
                             prev_point = previous_points[track_id]
-                            prev_signed = previous_signed_distances[track_id]
+                            corrected_dx = (point[0] - prev_point[0]) - global_dx
+                            corrected_dy = (point[1] - prev_point[1]) - global_dy
 
-                            crossed_line = prev_signed * signed_distance < 0
-                            displacement = np.hypot(point[0] - prev_point[0], point[1] - prev_point[1])
-
-                            if crossed_line and displacement > 2.0:
-                                corrected_dx = (point[0] - prev_point[0]) - global_dx
-                                corrected_dy = (point[1] - prev_point[1]) - global_dy
-                                direction = classify_direction(corrected_dx, corrected_dy)
-
-                                counted_track_ids.add(track_id)
-                                per_class_count[class_name] += 1
-                                per_direction_count[direction] += 1
-                                confidence_accumulator[class_name].append(confidence)
-
-                                event_index += 1
-                                report_rows.append(
-                                    {
-                                        "event_id": event_index,
-                                        "timestamp_seconds": round(frame_index / fps, 3),
-                                        "frame_index": frame_index,
-                                        "track_id": track_id,
-                                        "vehicle_class": class_name,
-                                        "crossing_direction": direction,
-                                        "line_point_x": int(point[0]),
-                                        "line_point_y": int(point[1]),
-                                        "confidence": round(confidence, 4),
-                                        "device_used": device,
-                                        "processing_fps": 0.0,
-                                    }
+                            if use_region_mode and task.region_box is not None:
+                                polygon = np.array(task.region_box, dtype=np.int32)
+                                prev_inside = previous_inside_region.get(
+                                    track_id,
+                                    cv2.pointPolygonTest(polygon, (float(prev_point[0]), float(prev_point[1])), False) >= 0,
+                                )
+                                curr_inside = cv2.pointPolygonTest(polygon, (float(point[0]), float(point[1])), False) >= 0
+                                edge_crossed = point_to_box_edge_crossing(
+                                    prev_point,
+                                    point,
+                                    edges,
+                                    task.region_orientation,
                                 )
 
-                        previous_points[track_id] = point
-                        previous_signed_distances[track_id] = signed_distance
+                                entered_region = (not prev_inside) and curr_inside
+                                if entered_region and track_id not in counted_track_ids:
+                                    direction = classify_entry_direction(
+                                        edge_crossed=edge_crossed,
+                                        dx=corrected_dx,
+                                        dy=corrected_dy,
+                                        orientation=task.region_orientation,
+                                    )
 
-            cv2.line(frame, p1, p2, (0, 255, 0), 3)
+                                    counted_track_ids.add(track_id)
+                                    unique_counted_track_ids.add(track_id)
+                                    per_class_count[class_name] += 1
+                                    per_direction_count[direction] += 1
+                                    confidence_accumulator[class_name].append(confidence)
+
+                                    event_index += 1
+                                    report_rows.append(
+                                        {
+                                            "event_id": event_index,
+                                            "timestamp_seconds": round(frame_index / fps, 3),
+                                            "frame_index": frame_index,
+                                            "track_id": track_id,
+                                            "vehicle_class": class_name,
+                                            "crossing_direction": direction,
+                                            "crossing_point_x": int(point[0]),
+                                            "crossing_point_y": int(point[1]),
+                                            "edge_crossed": edge_crossed or "entry",
+                                            "box_region_id": "region-1",
+                                            "confidence": round(confidence, 4),
+                                            "device_used": device,
+                                            "processing_fps": 0.0,
+                                        }
+                                    )
+                                previous_inside_region[track_id] = curr_inside
+                            else:
+                                prev_signed = previous_signed_distances[track_id]
+
+                                crossed_line = prev_signed * signed_distance < 0
+                                displacement = np.hypot(point[0] - prev_point[0], point[1] - prev_point[1])
+
+                                if crossed_line and displacement > 2.0 and track_id not in counted_track_ids:
+                                    direction = classify_direction(corrected_dx, corrected_dy)
+
+                                    counted_track_ids.add(track_id)
+                                    unique_counted_track_ids.add(track_id)
+                                    per_class_count[class_name] += 1
+                                    per_direction_count[direction] += 1
+                                    confidence_accumulator[class_name].append(confidence)
+
+                                    event_index += 1
+                                    report_rows.append(
+                                        {
+                                            "event_id": event_index,
+                                            "timestamp_seconds": round(frame_index / fps, 3),
+                                            "frame_index": frame_index,
+                                            "track_id": track_id,
+                                            "vehicle_class": class_name,
+                                            "crossing_direction": direction,
+                                            "crossing_point_x": int(point[0]),
+                                            "crossing_point_y": int(point[1]),
+                                            "edge_crossed": "line",
+                                            "box_region_id": "",
+                                            "confidence": round(confidence, 4),
+                                            "device_used": device,
+                                            "processing_fps": 0.0,
+                                        }
+                                    )
+
+                        previous_points[track_id] = point
+                        if not use_region_mode:
+                            previous_signed_distances[track_id] = signed_distance
+
+            if use_region_mode and task.region_box is not None:
+                draw_box_outline(frame, task.region_box)
+                render_edge_counters(frame, per_direction_count, task.region_orientation)
+            else:
+                cv2.line(frame, p1, p2, (0, 255, 0), 3)
+
+            draw_compass_overlay(frame)
+            draw_vehicle_counter_panel(frame, per_class_count)
             writer.write(frame)
 
             frame_index += 1
@@ -243,7 +412,7 @@ def process_task(task_id: str) -> None:
         result = {
             "task_id": task_id,
             "status": "completed",
-            "total_unique_vehicles": int(sum(per_class_count.values())),
+            "total_unique_vehicles": len(unique_counted_track_ids),
             "per_class_count": dict(per_class_count),
             "per_direction_count": {
                 "North": per_direction_count.get("North", 0),
@@ -268,9 +437,11 @@ def process_task(task_id: str) -> None:
             progress_percent=100.0,
             result=result,
         )
+        persist_task_snapshot(task_id)
     except Exception as exc:
         logger.exception("Task %s failed during processing", task_id)
         store.update(task_id, status="failed", stage="error", error="Processing failed")
+        persist_task_snapshot(task_id)
     finally:
         if cap is not None:
             cap.release()

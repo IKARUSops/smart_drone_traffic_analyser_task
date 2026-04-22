@@ -6,17 +6,18 @@ import Link from "next/link";
 
 import LinePicker from "@/components/LinePicker";
 import MediaPlayer from "@/components/MediaPlayer";
-import { ResultResponse, StatusResponse, UploadResponse } from "@/types/api";
+import { RegionSelectionRequest, ResultResponse, StatusResponse, UploadResponse } from "@/types/api";
 
-type Step = "upload" | "line" | "processing" | "result" | "error";
+type Step = "upload" | "line" | "processing" | "result" | "cancelled" | "error";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 const STEP_LABELS: Record<Step, string> = {
   upload: "Step 1 of 4 - Upload",
-  line: "Step 2 of 4 - Define line",
+  line: "Step 2 of 4 - Define region",
   processing: "Step 3 of 4 - Processing",
   result: "Step 4 of 4 - Results",
+  cancelled: "Flow cancelled",
   error: "Flow interrupted",
 };
 
@@ -31,6 +32,8 @@ export default function InferencePage() {
   const [result, setResult] = useState<ResultResponse | null>(null);
   const [error, setError] = useState<string>("");
   const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [isCancelling, setIsCancelling] = useState<boolean>(false);
+  const [cancelNotice, setCancelNotice] = useState<string>("");
   const [reportFormat, setReportFormat] = useState<"csv" | "xlsx">("csv");
 
   const canUpload = useMemo(() => !isUploading && step === "upload", [isUploading, step]);
@@ -85,14 +88,9 @@ export default function InferencePage() {
     }
   };
 
-  const submitLine = async (payload: {
-    line_points: number[][];
-    image_width: number;
-    image_height: number;
-    scene_mode: "auto" | "top_down" | "angled";
-  }) => {
+  const submitLine = async (payload: RegionSelectionRequest) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/tasks/${taskId}/line`, {
+      const response = await fetch(`${API_BASE_URL}/api/v2/tasks/${taskId}/region`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -101,13 +99,39 @@ export default function InferencePage() {
         body: JSON.stringify(payload),
       });
       if (!response.ok) {
-        throw new Error("Failed to submit line");
+        throw new Error("Failed to submit region");
       }
 
       setStep("processing");
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "Failed to submit line");
+      setError(submitError instanceof Error ? submitError.message : "Failed to submit region");
       setStep("error");
+    }
+  };
+
+  const requestCancellation = async () => {
+    if (!taskId || !taskToken || isCancelling) {
+      return;
+    }
+
+    setIsCancelling(true);
+    setCancelNotice("");
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/tasks/${taskId}/cancel`, {
+        method: "POST",
+        headers: { "X-Task-Token": taskToken },
+      });
+      if (!response.ok) {
+        throw new Error("Failed to request cancellation");
+      }
+
+      setCancelNotice("Cancellation requested. Waiting for the worker to stop.");
+    } catch (cancelError) {
+      setError(cancelError instanceof Error ? cancelError.message : "Failed to request cancellation");
+      setStep("error");
+    } finally {
+      setIsCancelling(false);
     }
   };
 
@@ -127,6 +151,10 @@ export default function InferencePage() {
 
         const statusPayload: StatusResponse = await statusResponse.json();
         setStatus(statusPayload);
+
+        if (statusPayload.cancellation_requested) {
+          setCancelNotice("Cancellation requested. Waiting for the worker to stop.");
+        }
 
         if (statusPayload.status === "completed") {
           window.clearInterval(interval);
@@ -149,6 +177,11 @@ export default function InferencePage() {
           window.clearInterval(interval);
           setError(statusPayload.error ?? "Processing failed");
           setStep("error");
+        }
+
+        if (statusPayload.status === "cancelled") {
+          window.clearInterval(interval);
+          setStep("cancelled");
         }
       } catch (pollError) {
         window.clearInterval(interval);
@@ -197,9 +230,9 @@ export default function InferencePage() {
       <section className="workspace-banner">
         <div>
           <p className="eyebrow">Inference workflow</p>
-          <h1>Upload a clip, place the counting line, and run traffic analysis.</h1>
+          <h1>Upload a clip, place the counting region, and run traffic analysis.</h1>
           <p className="hero-text">
-            The backend extracts frame 20 for placement, then tracks and counts crossings before generating the report.
+            The backend extracts frame 20 for region placement, then tracks and counts edge crossings before generating the report.
           </p>
         </div>
 
@@ -219,7 +252,7 @@ export default function InferencePage() {
             <p className="eyebrow">Smart Drone Traffic Analyzer</p>
             <h2>Traffic Intelligence Dashboard</h2>
             <p className="subtitle">
-              Upload one video, define a single counting line, and extract directional flow metrics.
+              Upload one video, define one counting region, and extract directional flow metrics.
             </p>
           </div>
           <span className="step-badge">{STEP_LABELS[step]}</span>
@@ -228,7 +261,7 @@ export default function InferencePage() {
         {step === "upload" && (
           <section className="panel">
             <h2>Upload Video</h2>
-            <p>After upload, frame 20 opens for line placement before processing starts.</p>
+            <p>After upload, frame 20 opens for 4-point region placement before processing starts.</p>
             <div className="upload-drop">
               <label>
                 {isUploading ? "Uploading..." : "Select Video File"}
@@ -255,6 +288,7 @@ export default function InferencePage() {
               <span className="stage-chip">{status?.stage ?? "Initializing model"}</span>
               <span>{(status?.progress_percent ?? 0).toFixed(1)}% complete</span>
             </div>
+            {cancelNotice && <p className="notice-text">{cancelNotice}</p>}
             <progress value={status?.progress_percent ?? 0} max={100} />
             <div className="stat-grid">
               <article>
@@ -272,6 +306,11 @@ export default function InferencePage() {
                 <p>{status?.fps ?? 0}</p>
               </article>
             </div>
+            <div className="controls">
+              <button className="secondary" type="button" onClick={requestCancellation} disabled={isCancelling || !!status?.cancellation_requested}>
+                {status?.cancellation_requested ? "Cancellation requested" : isCancelling ? "Requesting cancellation..." : "Cancel processing"}
+              </button>
+            </div>
           </section>
         )}
 
@@ -279,7 +318,7 @@ export default function InferencePage() {
           <section className="result-grid">
             <div className="panel result-summary">
               <h2>Analysis Completed</h2>
-              <p>Directional counts are computed after crossing-line verification with track-level deduplication.</p>
+              <p>Directional counts are computed after edge-crossing verification with track-level deduplication.</p>
               <div className="stat-grid">
                 <article>
                   <h3>Total unique vehicles</h3>
@@ -335,6 +374,16 @@ export default function InferencePage() {
             <p>{error || "Unknown error"}</p>
             <button className="primary" type="button" onClick={() => window.location.reload()}>
               Restart flow
+            </button>
+          </section>
+        )}
+
+        {step === "cancelled" && (
+          <section className="panel cancelled-panel">
+            <h2>Processing Cancelled</h2>
+            <p>Your cancellation request was applied and processing has stopped for this task.</p>
+            <button className="primary" type="button" onClick={() => window.location.reload()}>
+              Start new analysis
             </button>
           </section>
         )}

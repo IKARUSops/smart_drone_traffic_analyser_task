@@ -293,6 +293,77 @@ a {
   padding: 24px;
 }
 
+.dashboard-table-wrap {
+  padding: 20px;
+}
+
+.dashboard-table-scroll {
+  overflow-x: auto;
+  margin-top: 12px;
+}
+
+.dashboard-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 920px;
+}
+
+.dashboard-table th,
+.dashboard-table td {
+  text-align: left;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.dashboard-table th {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.dashboard-table td {
+  font-size: 0.9rem;
+}
+
+.dashboard-actions-cell {
+  display: flex;
+  gap: 8px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(7, 9, 14, 0.7);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 40;
+}
+
+.modal-card {
+  width: min(900px, 100%);
+  max-height: 88vh;
+  overflow-y: auto;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: linear-gradient(180deg, rgba(18, 22, 32, 0.98), rgba(14, 18, 28, 0.98));
+  padding: 20px;
+}
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dashboard-modal-downloads {
+  margin-top: 16px;
+}
+
 .inference-page .workspace-banner {
   grid-template-columns: minmax(0, 1.2fr) minmax(240px, 0.7fr);
   align-items: center;
@@ -488,6 +559,12 @@ h4 {
   cursor: crosshair;
 }
 
+.error-text {
+  margin: 10px 0 0;
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
 .controls,
 .downloads {
   display: flex;
@@ -554,6 +631,12 @@ button:disabled {
   padding: 5px 10px;
   font-family: var(--font-mono), monospace;
   font-size: 0.76rem;
+}
+
+.notice-text {
+  margin: 10px 0 0;
+  color: #ffd6a1;
+  font-size: 0.9rem;
 }
 
 .stat-grid {
@@ -630,6 +713,11 @@ video {
 .error-panel {
   border-color: rgba(255, 94, 100, 0.55);
   background: linear-gradient(180deg, rgba(255, 94, 100, 0.12), rgba(27, 30, 39, 0.94));
+}
+
+.cancelled-panel {
+  border-color: rgba(255, 205, 120, 0.55);
+  background: linear-gradient(180deg, rgba(255, 205, 120, 0.12), rgba(27, 30, 39, 0.94));
 }
 
 .player-shell {

@@ -21,17 +21,22 @@ from app.core.settings import (
 )
 from app.models import TaskRecord
 from app.schemas.api import (
+    BoxSelectionRequest,
+    DashboardTaskDetailResponse,
+    DashboardTaskSummaryResponse,
     LineSelectionRequest,
     ResultResponse,
     StatusResponse,
     UploadResponse,
 )
+from app.services.database import delete_dashboard_task, get_dashboard_task, init_database, list_dashboard_tasks, upsert_dashboard_task
 from app.services.processor import process_task
 from app.services.maintenance import cleanup_expired_artifacts
 from app.services.video_io import extract_frame, save_upload_file
 from app.store import store
 
 app = FastAPI(title="Smart Drone Traffic Analyzer API", version="1.0.0")
+init_database()
 
 RANGE_RE = re.compile(r"bytes=(\d+)-(\d*)")
 
@@ -102,6 +107,27 @@ def stream_video_file(path: Path, range_header: str | None = None):
     )
 
 
+def compute_fallback_line_from_region(
+    box_points: list[list[int]],
+    region_orientation: str,
+) -> list[list[int]]:
+    # Temporary compatibility bridge: convert a 4-point region to a center guide line
+    # while the full box-edge crossing pipeline is implemented.
+    tl, tr, br, bl = box_points
+
+    if region_orientation == "horizontal":
+        p1 = [int(round((tl[0] + bl[0]) / 2)), int(round((tl[1] + bl[1]) / 2))]
+        p2 = [int(round((tr[0] + br[0]) / 2)), int(round((tr[1] + br[1]) / 2))]
+    else:
+        p1 = [int(round((tl[0] + tr[0]) / 2)), int(round((tl[1] + tr[1]) / 2))]
+        p2 = [int(round((bl[0] + br[0]) / 2)), int(round((bl[1] + br[1]) / 2))]
+
+    if p1 == p2:
+        p2 = [p2[0] + 1, p2[1] + 1]
+
+    return [p1, p2]
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -154,6 +180,7 @@ def upload_video(video: UploadFile = File(...)) -> UploadResponse:
         stage="awaiting line selection",
     )
     store.create(task)
+    upsert_dashboard_task(task)
 
     return UploadResponse(
         task_id=task_id,
@@ -205,9 +232,75 @@ def submit_line_selection(
     if reserve_state == "capacity_reached":
         raise HTTPException(status_code=429, detail="Processing queue is full. Please retry shortly.")
 
+    queued_task = store.get(task_id)
+    if queued_task is not None:
+        upsert_dashboard_task(queued_task)
+
     background_tasks.add_task(process_task, task_id)
 
     return {"task_id": task_id, "status": "queued", "message": "Line accepted. Processing started."}
+
+
+@app.post("/api/v2/tasks/{task_id}/region")
+def submit_region_selection(
+    task_id: str,
+    payload: BoxSelectionRequest,
+    background_tasks: BackgroundTasks,
+    x_task_token: str | None = Header(default=None),
+) -> dict[str, str]:
+    assert_task_access(task_id, x_task_token)
+
+    for point in payload.box_points:
+        if point[0] >= payload.image_width or point[1] >= payload.image_height:
+            raise HTTPException(status_code=400, detail="Region points must be within image bounds")
+
+    line_points = compute_fallback_line_from_region(payload.box_points, payload.region_orientation)
+
+    reserve_state = store.reserve_processing_slot(
+        task_id=task_id,
+        max_concurrent_tasks=MAX_CONCURRENT_TASKS,
+        line_points=line_points,
+        scene_mode=payload.scene_mode,
+        region_box=payload.box_points,
+        region_orientation=payload.region_orientation,
+    )
+    if reserve_state == "not_found":
+        raise HTTPException(status_code=404, detail="Task not found")
+    if reserve_state == "invalid_status":
+        raise HTTPException(status_code=409, detail="Region cannot be changed in current status")
+    if reserve_state == "capacity_reached":
+        raise HTTPException(status_code=429, detail="Processing queue is full. Please retry shortly.")
+
+    queued_task = store.get(task_id)
+    if queued_task is not None:
+        upsert_dashboard_task(queued_task)
+
+    background_tasks.add_task(process_task, task_id)
+
+    return {
+        "task_id": task_id,
+        "status": "queued",
+        "message": "Region accepted. Processing started.",
+    }
+
+
+@app.post("/api/v1/tasks/{task_id}/cancel", status_code=202)
+def cancel_task(task_id: str, x_task_token: str | None = Header(default=None)) -> dict[str, str]:
+    task = assert_task_access(task_id, x_task_token)
+    if task.status in {"completed", "failed", "cancelled"}:
+        raise HTTPException(status_code=409, detail="Task is already finished")
+    if task.status == "awaiting_line":
+        raise HTTPException(status_code=409, detail="Task has not started processing yet")
+
+    store.cancel_task(task_id)
+    cancelled_task = store.get(task_id)
+    if cancelled_task is not None:
+        upsert_dashboard_task(cancelled_task)
+    return {
+        "task_id": task_id,
+        "status": "cancellation_requested",
+        "message": "Cancellation requested",
+    }
 
 
 @app.get("/api/v1/tasks/{task_id}/status", response_model=StatusResponse)
@@ -218,6 +311,7 @@ def get_task_status(task_id: str, x_task_token: str | None = Header(default=None
         task_id=task.task_id,
         status=task.status,
         stage=task.stage,
+        cancellation_requested=task.cancellation_requested,
         progress_percent=task.progress_percent,
         processed_frames=task.processed_frames,
         total_frames=task.total_frames,
@@ -303,3 +397,97 @@ def cleanup_artifacts(x_admin_token: str | None = Header(default=None)) -> dict[
 
     removed_tasks = cleanup_expired_artifacts()
     return {"removed_tasks": removed_tasks}
+
+
+@app.get("/api/v1/dashboard/tasks", response_model=list[DashboardTaskSummaryResponse])
+def get_dashboard_tasks() -> list[DashboardTaskSummaryResponse]:
+    tasks = list_dashboard_tasks()
+    return [
+        DashboardTaskSummaryResponse(
+            task_id=item["task_id"],
+            status=item["status"],
+            stage=item["stage"] or "",
+            created_at=item.get("created_at"),
+            updated_at=item.get("updated_at"),
+            total_unique_vehicles=item.get("total_unique_vehicles") or 0,
+            processing_time_seconds=item.get("processing_time_seconds") or 0.0,
+            per_class_count=item.get("per_class_count") or {},
+            per_direction_count=item.get("per_direction_count") or {},
+        )
+        for item in tasks
+    ]
+
+
+@app.get("/api/v1/dashboard/tasks/{task_id}", response_model=DashboardTaskDetailResponse)
+def get_dashboard_task_detail(task_id: str) -> DashboardTaskDetailResponse:
+    item = get_dashboard_task(task_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Task not found in dashboard storage")
+
+    return DashboardTaskDetailResponse(
+        task_id=item["task_id"],
+        status=item["status"],
+        stage=item["stage"] or "",
+        created_at=item.get("created_at"),
+        updated_at=item.get("updated_at"),
+        scene_mode=item.get("scene_mode"),
+        region_orientation=item.get("region_orientation"),
+        error=item.get("error"),
+        per_class_count=item.get("per_class_count") or {},
+        per_direction_count=item.get("per_direction_count") or {},
+        result=item.get("result"),
+        video_stream_url=f"/api/v1/dashboard/tasks/{task_id}/video/stream",
+        video_download_url=f"/api/v1/dashboard/tasks/{task_id}/video/download",
+        report_csv_url=f"/api/v1/dashboard/tasks/{task_id}/report?format=csv",
+        report_xlsx_url=f"/api/v1/dashboard/tasks/{task_id}/report?format=xlsx",
+    )
+
+
+@app.get("/api/v1/dashboard/tasks/{task_id}/video/stream")
+def dashboard_video_stream(task_id: str, range: str | None = Header(default=None, alias="Range")):
+    item = get_dashboard_task(task_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Task not found in dashboard storage")
+    path = Path(item["output_video_path"])
+    return stream_video_file(path, range)
+
+
+@app.get("/api/v1/dashboard/tasks/{task_id}/video/download")
+def dashboard_video_download(task_id: str) -> FileResponse:
+    item = get_dashboard_task(task_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Task not found in dashboard storage")
+
+    path = Path(item["output_video_path"])
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Processed video not available")
+    return FileResponse(path, media_type="video/mp4", filename=f"{task_id}-processed.mp4")
+
+
+@app.get("/api/v1/dashboard/tasks/{task_id}/report")
+def dashboard_report_download(task_id: str, format: str = "csv") -> FileResponse:
+    item = get_dashboard_task(task_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Task not found in dashboard storage")
+
+    report_format = format.lower()
+    if report_format not in {"csv", "xlsx"}:
+        raise HTTPException(status_code=400, detail="format must be either csv or xlsx")
+
+    selected_path = item["csv_report_path"] if report_format == "csv" else item["xlsx_report_path"]
+    path = Path(selected_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Requested report is not available")
+
+    media_type = "text/csv" if report_format == "csv" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    return FileResponse(path, media_type=media_type, filename=f"{task_id}-report.{report_format}")
+
+
+@app.delete("/api/v1/dashboard/tasks/{task_id}")
+def delete_dashboard_task_data(task_id: str) -> dict[str, str]:
+    deleted = delete_dashboard_task(task_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Task not found in dashboard storage")
+
+    store.delete(task_id)
+    return {"task_id": task_id, "status": "deleted"}

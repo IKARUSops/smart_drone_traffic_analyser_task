@@ -12,7 +12,7 @@ End-to-end traffic analysis system with:
 - Detection model: YOLOv10
 - Vehicle scope: includes bicycle and other vehicle classes from configured YOLO IDs
 - Counting directions: North, South, East, West
-- Line definition: user selects exactly 2 points on frame 20 after upload
+- Line/region definition: user selects 4 points on frame 20 to define a convex counting region
 - Export format: user chooses CSV or XLSX at download time
 - Artifact retention target: 24 hours
 
@@ -25,7 +25,7 @@ The backend is asynchronous and task-based.
 Workflow:
 1. Upload video
 2. Extract frame 20 for line-selection UI
-3. Accept two OpenCV-format points
+3. Accept four OpenCV-format points for a convex region
 4. Start tracking/counting job in background
 5. Poll status until completion
 6. Return annotated video and downloadable reports
@@ -42,22 +42,22 @@ Core modules:
 
 UI states:
 1. Upload view
-2. Line picker view (frame 20)
+2. Region picker view (frame 20)
 3. Processing view with 2-second polling
 4. Result dashboard with video playback and report download
 
 Core files:
 - `frontend/app/page.tsx` full UI flow and API integration
-- `frontend/components/LinePicker.tsx` two-point line picker canvas
+- `frontend/components/LinePicker.tsx` four-point region picker canvas
 - `frontend/types/api.ts` API contracts
 
 ## Counting Methodology
 
 ### Trigger rule
 
-- Compute signed distance of tracked point to user-defined line
-- A crossing is registered when the sign changes between consecutive observations
-- One unique count per track ID to prevent double counting
+- Compute signed distance of tracked point against monitored region edges
+- A crossing is registered when the sign changes between consecutive observations for monitored edges
+- One unique count per track ID and monitored edge to prevent duplicate edge events
 
 ### Tracking point mode
 
@@ -80,7 +80,7 @@ Base URL: `http://localhost:8000`
 - Returns: `task_id`, frame preview URL, status `awaiting_line`
 
 2. `GET /api/v1/tasks/{task_id}/frame`
-- Returns frame 20 image for line placement
+- Returns frame 20 image for region placement
 
 3. `POST /api/v1/tasks/{task_id}/line`
 - Body:
@@ -89,17 +89,28 @@ Base URL: `http://localhost:8000`
 	- `scene_mode`: `auto | top_down | angled`
 - Starts processing
 
-4. `GET /api/v1/tasks/{task_id}/status`
+4. `POST /api/v2/tasks/{task_id}/region`
+- Body:
+	- `box_points`: `[[x1,y1],[x2,y2],[x3,y3],[x4,y4]]` in OpenCV pixel coordinates (convex ordered quad)
+	- `image_width`, `image_height`
+	- `scene_mode`: `auto | top_down | angled`
+	- `region_orientation`: `horizontal | vertical`
+- Starts processing
+
+5. `GET /api/v1/tasks/{task_id}/status`
 - Returns task progress, FPS, ETA, stage and failure details
 
-5. `GET /api/v1/tasks/{task_id}/result`
+6. `GET /api/v1/tasks/{task_id}/result`
 - Returns total unique count, class counts, directional counts, confidence summary, performance metrics
 
-6. `GET /api/v1/tasks/{task_id}/video`
+7. `GET /api/v1/tasks/{task_id}/video`
 - Returns annotated output MP4
 
-7. `GET /api/v1/tasks/{task_id}/report?format=csv|xlsx`
+8. `GET /api/v1/tasks/{task_id}/report?format=csv|xlsx`
 - Returns user-selected report format
+
+9. `POST /api/v1/tasks/{task_id}/cancel`
+- Requests graceful cancellation of an in-flight task
 
 ## Report Columns
 
@@ -109,8 +120,10 @@ Base URL: `http://localhost:8000`
 - `track_id`
 - `vehicle_class`
 - `crossing_direction`
-- `line_point_x`
-- `line_point_y`
+- `crossing_point_x`
+- `crossing_point_y`
+- `edge_crossed`
+- `box_region_id`
 - `confidence`
 - `device_used`
 - `processing_fps`
@@ -157,8 +170,8 @@ Open:
 ## 3) Typical run
 
 1. Upload video
-2. Pick two points on frame 20
-3. Confirm line
+2. Pick four ordered points on frame 20 to define the region
+3. Confirm region
 4. Wait for processing completion
 5. Watch processed video and download CSV/XLSX
 
